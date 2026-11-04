@@ -1,0 +1,9 @@
+[submodule "externals/lz4"]
+	path = externals/lz4
+	url = https://github.com/shadexternals/lz4
+[submodule "externals/zlib"]
+	path = externals/zlib
+	url = https://github.com/shadexternals/zlib
+[submodule "externals/bcdec"]
+	path = externals/bcdec
+	url = https://github.com/shadexternals/bcdec
