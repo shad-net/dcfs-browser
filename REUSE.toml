@@ -1,0 +1,14 @@
+version = 1
+
+[[annotations]]
+path = [
+    "REUSE.toml",
+    ".github/workflows/*.*",
+    ".gitignore",
+    ".gitmodules",
+    ".clang-format",
+    "README.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "dcfs-browser Project"
+SPDX-License-Identifier = "GPL-2.0-or-later"

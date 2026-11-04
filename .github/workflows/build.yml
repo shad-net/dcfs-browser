@@ -1,0 +1,90 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install clang-format-19
+      run: |
+        wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
+        sudo apt-get update
+        sudo apt-get install -y clang-format-19
+
+    - name: Check formatting
+      run: |
+        find src gui -name '*.cpp' -o -name '*.h' \
+          | xargs clang-format-19 --dry-run --Werror
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            artifact: dcfs-browser-linux
+          - name: Windows
+            os: windows-2022
+            artifact: dcfs-browser-windows
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: '6.10.1'
+          aqtversion: '==3.3.0'
+          cache: true
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pip install lz4
+          for mode in "lz4" "zlib" "none" "lz4 --v100" "lz4 --alpha"; do
+            dir="test/$(echo $mode | tr ' ' '_')"
+            python3 tools/make_test_archive.py "$dir" --compression $mode
+            build/dcfs-browser --extract "$dir/out" "$dir"
+          done
+          build/dcfs-browser --scan test
+          build/dcfs-browser --list --extract test/rpk --png --rpk data/cars/abarth/abarth_695.rpk test/lz4
+          build/dcfs-browser --export-textures test/textures --texture-format both test/lz4
+          build/dcfs-browser --export test/lists --per-data-file --format csv test/lz4
+
+      - name: Collect (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir dist
+          cp build/dcfs-browser README.md dist/
+
+      - name: Collect (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/Release/* dist/ -Recurse
+          Copy-Item README.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
