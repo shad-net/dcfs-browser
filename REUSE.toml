@@ -4,6 +4,7 @@ version = 1
 path = [
     "REUSE.toml",
     ".github/workflows/*.*",
+    ".github/*.*",
     ".gitignore",
     ".gitmodules",
     ".clang-format",
