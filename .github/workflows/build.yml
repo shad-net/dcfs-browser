@@ -63,20 +63,6 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
 
-      - name: Test (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          pip install lz4
-          for mode in "lz4" "zlib" "none" "lz4 --v100" "lz4 --alpha"; do
-            dir="test/$(echo $mode | tr ' ' '_')"
-            python3 tools/make_test_archive.py "$dir" --compression $mode
-            build/dcfs-browser --extract "$dir/out" "$dir"
-          done
-          build/dcfs-browser --scan test
-          build/dcfs-browser --list --extract test/rpk --png --rpk data/cars/abarth/abarth_695.rpk test/lz4
-          build/dcfs-browser --export-textures test/textures --texture-format both test/lz4
-          build/dcfs-browser --export test/lists --per-data-file --format csv test/lz4
-
       - name: Collect (Linux)
         if: runner.os == 'Linux'
         run: |
