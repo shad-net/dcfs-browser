@@ -71,6 +71,7 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QtEndian>
 
 #include <algorithm>
 
@@ -89,7 +90,35 @@ QString number(qint64 value) {
     return QLocale().toString(value);
 }
 
+bool isEvoStream(const QByteArray& head) {
+    return head.startsWith("EVOSLITL") || head.startsWith("EVOSBIG ");
+}
+
+QString evoStreamNote(const QByteArray& head, const QString& suffix) {
+    const bool little = head.startsWith("EVOSLITL");
+    QString note = little ? QObject::tr(" Evo binary stream (little-endian).")
+                          : QObject::tr(" Evo binary stream (big-endian, PS3).");
+    if (suffix == QLatin1String("rpk") || head.size() < 20) {
+        return note;
+    }
+    const uchar* p = reinterpret_cast<const uchar*>(head.constData());
+    const quint64 uid = little ? qFromLittleEndian<quint64>(p + 8) : qFromBigEndian<quint64>(p + 8);
+    const quint32 version =
+        little ? qFromLittleEndian<quint32>(p + 16) : qFromBigEndian<quint32>(p + 16);
+    const quint16 type = quint16(uid >> 48);
+    if (type >= 1 && type <= 76 && !resourceTypeName(type).startsWith(QLatin1String("TYPE_"))) {
+        note.chop(1);
+        note += QObject::tr(": looks like a %1 resource, version 0x%2.")
+                    .arg(resourceTypeName(type))
+                    .arg(version, 0, 16);
+    }
+    return note;
+}
+
 bool looksLikeText(const QByteArray& head, const QString& suffix) {
+    if (isEvoStream(head)) {
+        return false; // binary, whatever the name says (many .txt files are)
+    }
     static const QStringList textSuffixes = {
         QStringLiteral("xml"),  QStringLiteral("txt"),  QStringLiteral("ini"),
         QStringLiteral("json"), QStringLiteral("lua"),  QStringLiteral("cfg"),
@@ -736,9 +765,12 @@ void MainWindow::showPreview(int entryIndex) {
     if (head.size() >= 4) {
         note += tr(" Starts with \"%1\".").arg(fourCC(head).toHtmlEscaped());
     }
+    const QString suffix = QFileInfo(entry.name).suffix().toLower();
+    if (isEvoStream(head)) {
+        note += evoStreamNote(head, suffix);
+    }
 
     PreviewTab best = HexTab;
-    const QString suffix = QFileInfo(entry.name).suffix().toLower();
     const bool csv = suffix == QLatin1String("csv") || suffix == QLatin1String("tsv");
     if (csv && entry.size <= TablePreviewBytes) {
         QByteArray bytes = head;

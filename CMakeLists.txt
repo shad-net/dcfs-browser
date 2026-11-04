@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright 2026 dcfs-browser Project
+# SPDX-FileCopyrightText: Copyright 2026 dcfs-browser Server Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 cmake_minimum_required(VERSION 3.19)
@@ -31,6 +31,7 @@ add_library(evofs STATIC
     src/evo_index.cpp src/evo_index.h
     src/evo_reader.cpp src/evo_reader.h
     src/file_list.cpp src/file_list.h
+    src/material.cpp src/material.h
     src/resource_export.cpp src/resource_export.h
     src/resource_pack.cpp src/resource_pack.h
     src/texture.cpp src/texture.h

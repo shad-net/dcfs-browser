@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2026 dcfs-browser Project
+// SPDX-FileCopyrightText: Copyright 2026 dcfs-browser Server Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Evolution Studios resource packs (.rpk): a table of typed resources (textures, XML, binary
@@ -20,6 +20,8 @@
 enum class ResourceType : quint16 {
     ResourceInfoBlock = 1,
     PixelBuffer = 5,
+    Shader = 6,
+    Material = 7,
     Bin = 38,
     Xml = 39,
     TopMips = 71,

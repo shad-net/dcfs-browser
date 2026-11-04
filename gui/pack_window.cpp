@@ -4,6 +4,7 @@
 #include "pack_window.h"
 
 #include "file_tree_model.h"
+#include "material.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -31,17 +32,19 @@
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QTextBrowser>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
 constexpr qint64 HexPreviewBytes = 64 * 1024;
 constexpr int IndexRole = Qt::UserRole + 1;
 enum Column { NameColumn, TypeColumn, SizeColumn, UidColumn };
-enum Tab { ImageTab, TextTab, HexTab };
+enum Tab { ImageTab, TextTab, HexTab, MaterialTab };
 enum Channels { ChannelsRgba, ChannelsRgb, ChannelsR, ChannelsG, ChannelsB, ChannelsA };
 
 QString uidText(quint64 uid) {
@@ -178,6 +181,16 @@ PackWindow::PackWindow(std::unique_ptr<PackContext> context, QWidget* parent)
     tabs_->addTab(imageTab_, tr("Texture"));
     tabs_->addTab(text_, tr("Text"));
     tabs_->addTab(hex_, tr("Hex"));
+    material_ = new QTextBrowser;
+    material_->setOpenLinks(false);
+    connect(material_, &QTextBrowser::anchorClicked, this, [this](const QUrl& url) {
+        // "uid:<hex>" selects that resource in the table.
+        if (url.scheme() == QLatin1String("uid")) {
+            selectResource(url.path().toULongLong(nullptr, 16));
+        }
+    });
+    tabs_->addTab(material_, tr("Material"));
+    tabs_->setTabEnabled(MaterialTab, false);
 
     auto* right = new QWidget;
     auto* rightLayout = new QVBoxLayout(right);
@@ -330,6 +343,8 @@ void PackWindow::showSelection() {
     hex_->clear();
     tabs_->setTabEnabled(ImageTab, false);
     tabs_->setTabEnabled(TextTab, false);
+    tabs_->setTabEnabled(MaterialTab, false);
+    material_->clear();
     if (selected.size() != 1) {
         details_->setText(selected.empty() ? tr("Select a resource to preview it.")
                                            : tr("%1 resources selected.").arg(selected.size()));
@@ -356,6 +371,9 @@ void PackWindow::showSelection() {
     hex_->setPlainText(hexDump(pack.raw(info).left(HexPreviewBytes)));
 
     switch (ResourceType(info.type())) {
+    case ResourceType::Material:
+        showMaterial(info);
+        return;
     case ResourceType::PixelBuffer:
         showTexture(info);
         return;
@@ -531,4 +549,179 @@ void PackWindow::exportResources(std::vector<int> resources, const QString& what
     if (box.clickedButton() == show) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
     }
+}
+
+namespace {
+
+QString hashText(quint32 hash) {
+    return QStringLiteral("%1").arg(hash, 8, 16, QLatin1Char('0'));
+}
+
+QString floatText(float value) {
+    if (value == 0.0f) {
+        return QStringLiteral("0");
+    }
+    return QString::number(double(value), 'g', 6);
+}
+
+// Linear 0..1 to an sRGB byte, for showing a value that may be a colour.
+int toSrgb(float linear) {
+    const float c = std::clamp(linear, 0.0f, 1.0f);
+    const float s = c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+    return int(s * 255.0f + 0.5f);
+}
+
+// Three values that could be a colour: all within 0..1, and not just zeros and ones.
+bool colourLike(float r, float g, float b) {
+    const float v[3] = {r, g, b};
+    bool fractional = false;
+    for (float x : v) {
+        if (!(x >= 0.0f && x <= 1.0f)) {
+            return false;
+        }
+        fractional = fractional || (x != 0.0f && x != 1.0f);
+    }
+    return fractional;
+}
+
+} // namespace
+
+void PackWindow::selectResource(quint64 uid) {
+    for (int r = 0; r < table_->rowCount(); ++r) {
+        const int index = table_->item(r, NameColumn)->data(IndexRole).toInt();
+        if (context_->pack().resources()[size_t(index)].uid == uid) {
+            if (table_->isRowHidden(r)) {
+                typeFilter_->setCurrentIndex(0);
+                nameFilter_->clear();
+            }
+            table_->selectRow(r);
+            table_->scrollToItem(table_->item(r, NameColumn));
+            return;
+        }
+    }
+}
+
+void PackWindow::showMaterial(const ResourceInfo& info) {
+    const ResourcePack& pack = context_->pack();
+    QString error;
+    const auto material = parseMaterial(pack, info, &error);
+    tabs_->setTabEnabled(MaterialTab, true);
+    tabs_->setCurrentIndex(MaterialTab);
+    if (!material) {
+        material_->setHtml(tr("<p style=\"color:#c02020\">Could not read this material: %1</p>"
+                              "<p>The Hex tab shows its bytes.</p>")
+                               .arg(error.toHtmlEscaped()));
+        return;
+    }
+
+    QString shader;
+    for (quint64 dependency : info.dependencies) {
+        if (quint16(dependency >> 48) == 6) {
+            shader = QStringLiteral("%1").arg(dependency, 16, 16, QLatin1Char('0')).toUpper();
+        }
+    }
+    QString html = QStringLiteral("<style>td,th{padding:2px 8px;} th{text-align:left;} "
+                                  ".dim{color:#808080;} .mono{font-family:monospace;}</style>");
+    html += tr("<p>Version 0x%1 &middot; %2 texture slots &middot; %3 parameters &middot; "
+               "%4 bytes of constants")
+                .arg(material->version, 0, 16)
+                .arg(material->textureSlots.size())
+                .arg(material->parameterHashes.size())
+                .arg(material->constants.size());
+    if (!shader.isEmpty()) {
+        html += tr("<br>Shader <span class=\"mono\">%1</span> <span class=\"dim\">(in another "
+                   "pack)</span>")
+                    .arg(shader);
+    }
+    html += QStringLiteral("</p>");
+
+    // Texture slots, with the texture each one uses when that is known.
+    const std::vector<quint64> textures = materialSlotTextures(*material, info);
+    html += tr("<h3>Texture slots</h3><table><tr><th>#</th><th>Slot</th><th>Flags</th>"
+               "<th>Sampler</th><th>Values</th><th>Texture</th></tr>");
+    for (size_t i = 0; i < material->textureSlots.size(); ++i) {
+        const MaterialSlot& slot = material->textureSlots[i];
+        QString texture;
+        if (textures.empty()) {
+            texture = QStringLiteral("<span class=\"dim\">?</span>");
+        } else if (textures[i] == 0) {
+            texture = tr("<span class=\"dim\">none (set by the engine?)</span>");
+        } else if (const ResourceInfo* t = pack.find(textures[i])) {
+            texture = QStringLiteral("<a href=\"uid:%1\">%2</a>")
+                          .arg(textures[i], 0, 16)
+                          .arg(t->displayName().toHtmlEscaped());
+        } else {
+            texture =
+                tr("<span class=\"mono\">%1</span> <span class=\"dim\">(other pack)</span>")
+                    .arg(QStringLiteral("%1").arg(textures[i], 16, 16, QLatin1Char('0')).toUpper());
+        }
+        html += QStringLiteral("<tr><td>%1</td><td class=\"mono\">%2</td><td>%3</td>"
+                               "<td class=\"mono\">%4</td><td>%5, %6, %7</td><td>%8</td></tr>")
+                    .arg(i)
+                    .arg(hashText(slot.nameHash))
+                    .arg(slot.flags)
+                    .arg(QString::fromLatin1(
+                        QByteArray(reinterpret_cast<const char*>(slot.state.data()), 4).toHex(' ')))
+                    .arg(floatText(slot.values[0]), floatText(slot.values[1]),
+                         floatText(slot.values[2]), texture);
+    }
+    html += QStringLiteral("</table>");
+    if (textures.empty() && material->textureSlots.size() > 1) {
+        html += tr("<p class=\"dim\">This material has %1 texture dependencies for %2 slots, so "
+                   "which texture goes in which slot is not known.</p>")
+                    .arg(std::count_if(info.dependencies.begin(), info.dependencies.end(),
+                                       [](quint64 d) { return quint16(d >> 48) == 5; }))
+                    .arg(material->textureSlots.size());
+    }
+
+    // Parameters: the names, then the values in rows of four (the shader's 16-byte registers).
+    html += tr("<h3>Parameters</h3><p>Block <span class=\"mono\">%1</span> (flags %2), "
+               "names: <span class=\"mono\">%3</span></p>")
+                .arg(hashText(material->blockHash))
+                .arg(material->blockFlags)
+                .arg([&] {
+                    QStringList names;
+                    for (quint32 h : material->parameterHashes) {
+                        names << hashText(h);
+                    }
+                    return names.isEmpty() ? tr("none") : names.join(QStringLiteral(" "));
+                }());
+    if (!material->hasConstants) {
+        html += tr("<p class=\"dim\">No constant values stored.</p>");
+    } else {
+        html += tr("<table><tr><th>Offset</th><th>x</th><th>y</th><th>z</th><th>w</th>"
+                   "<th></th></tr>");
+        for (int row = 0; row * 4 < material->floatCount(); ++row) {
+            QStringList cells;
+            float v[4] = {0, 0, 0, 0};
+            const int n = std::min(4, material->floatCount() - row * 4);
+            for (int i = 0; i < 4; ++i) {
+                if (i < n) {
+                    v[i] = material->constant(row * 4 + i);
+                    cells << floatText(v[i]);
+                } else {
+                    cells << QString();
+                }
+            }
+            QString swatch;
+            if (n >= 3 && colourLike(v[0], v[1], v[2])) {
+                const QString colour = QStringLiteral("#%1%2%3")
+                                           .arg(toSrgb(v[0]), 2, 16, QLatin1Char('0'))
+                                           .arg(toSrgb(v[1]), 2, 16, QLatin1Char('0'))
+                                           .arg(toSrgb(v[2]), 2, 16, QLatin1Char('0'));
+                swatch = QStringLiteral("<td bgcolor=\"%1\" width=\"36\">&nbsp;</td>"
+                                        "<td class=\"dim\">%1?</td>")
+                             .arg(colour);
+            }
+            html += QStringLiteral("<tr><td class=\"mono\">+0x%1</td><td>%2</td><td>%3</td>"
+                                   "<td>%4</td><td>%5</td>%6</tr>")
+                        .arg(row * 16, 2, 16, QLatin1Char('0'))
+                        .arg(cells[0], cells[1], cells[2], cells[3], swatch);
+        }
+        html += QStringLiteral("</table>");
+        html += tr("<p class=\"dim\">Swatches mark rows whose first three values could be a "
+                   "linear colour (shown converted to sRGB). Which value means what depends on "
+                   "the shader; the names are hashes until their strings are found.</p>");
+    }
+    material_->setHtml(html);
 }

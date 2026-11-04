@@ -20,6 +20,7 @@ class QPushButton;
 class QScrollArea;
 class QTabWidget;
 class QTableWidget;
+class QTextBrowser;
 
 class PackWindow : public QMainWindow {
     Q_OBJECT
@@ -35,6 +36,8 @@ private:
     void applyFilter();
     void showSelection();
     void showTexture(const ResourceInfo& info);
+    void showMaterial(const ResourceInfo& info);
+    void selectResource(quint64 uid);
     void updateImage();
     std::vector<int> selectedResources() const;
     std::vector<int> visibleResources() const;
@@ -61,4 +64,5 @@ private:
     QLabel* imageView_;
     QPlainTextEdit* text_;
     QPlainTextEdit* hex_;
+    QTextBrowser* material_;
 };
